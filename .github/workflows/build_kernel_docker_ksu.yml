@@ -95,7 +95,7 @@ jobs:
           test -d drivers/kernelsu || (echo "KernelSU directory missing!" && exit 1)
           grep -q "CONFIG_KSU" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
 
-      - name: Configure Kernel (Stock Baseline + Docker + KSU + Permissive CFI)
+      - name: Configure Kernel (Stock Baseline + Docker + KSU + Permissive CFI + ThinLTO)
         run: |
           cd $GITHUB_WORKSPACE/android/kernel
           mkdir -p out
@@ -103,7 +103,7 @@ jobs:
           # 1. Copy 100% verified stock config extracted from running phone
           cp $GITHUB_WORKSPACE/socrates_stock_defconfig out/.config
           
-          # 2. Inject Docker and KernelSU configs + Permissive CFI (safety net)
+          # 2. Inject Docker, KernelSU, Permissive CFI, and ThinLTO (Memory & CI Optimization)
           scripts/config --file out/.config \
             -e CONFIG_PID_NS \
             -e CONFIG_IPC_NS \
@@ -116,14 +116,30 @@ jobs:
             -e CONFIG_IP_SET_HASH_IP \
             -e CONFIG_IP_SET_HASH_NET \
             -e CONFIG_KSU \
-            -e CONFIG_CFI_PERMISSIVE
+            -e CONFIG_CFI_PERMISSIVE \
+            -d CONFIG_LTO_CLANG_FULL \
+            -e CONFIG_LTO_CLANG_THIN
           
           export PATH=$GITHUB_WORKSPACE/toolchain/clang-host/clang-r596125/bin:$PATH
           MAKE_ARGS="O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-"
           make $MAKE_ARGS olddefconfig
           
           # Validate critical configuration lines
-          grep -E "(CONFIG_PID_NS|CONFIG_KSU|CONFIG_CFI_PERMISSIVE|CONFIG_STACKPROTECTOR_PER_TASK|CONFIG_LTO_CLANG_FULL)=y" out/.config
+          grep -E "(CONFIG_PID_NS|CONFIG_KSU|CONFIG_CFI_PERMISSIVE|CONFIG_STACKPROTECTOR_PER_TASK|CONFIG_LTO_CLANG_THIN)=y" out/.config
+
+      - name: Setup Dedicated 16GB High-Speed Swap & OOM Protection
+        run: |
+          echo "Setting up 16GB swap file to prevent runner OOM during LTO link..."
+          swapon --show || true
+          if ! swapon --show | grep -q "/swapfile"; then
+            sudo fallocate -l 16G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=16384
+            sudo chmod 600 /swapfile
+            sudo mkswap /swapfile
+            sudo swapon /swapfile
+          fi
+          sudo sysctl vm.swappiness=100
+          sudo sysctl vm.vfs_cache_pressure=50
+          free -h
 
       - name: Compile Kernel Image & Modules
         run: |
@@ -138,7 +154,9 @@ jobs:
           MAKE_ARGS="O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-"
           
           echo "Starting kernel build (-j$(nproc))..."
+          free -h
           make $MAKE_ARGS -j$(nproc) Image modules
+          free -h
           
           test -f out/arch/arm64/boot/Image || (echo "Kernel Image build failed!" && exit 1)
           strings out/arch/arm64/boot/Image | grep -E "Linux version 5\.15\." | head -n 1
