@@ -127,20 +127,6 @@ jobs:
           # Validate critical configuration lines
           grep -E "(CONFIG_PID_NS|CONFIG_KSU|CONFIG_CFI_PERMISSIVE|CONFIG_STACKPROTECTOR_PER_TASK|CONFIG_LTO_CLANG_THIN)=y" out/.config
 
-      - name: Setup Dedicated 16GB High-Speed Swap & OOM Protection
-        run: |
-          echo "Setting up 16GB swap file to prevent runner OOM during LTO link..."
-          swapon --show || true
-          if ! swapon --show | grep -q "/swapfile"; then
-            sudo fallocate -l 16G /swapfile || sudo dd if=/dev/zero of=/swapfile bs=1M count=16384
-            sudo chmod 600 /swapfile
-            sudo mkswap /swapfile
-            sudo swapon /swapfile
-          fi
-          sudo sysctl vm.swappiness=100
-          sudo sysctl vm.vfs_cache_pressure=50
-          free -h
-
       - name: Compile Kernel Image & Modules
         run: |
           export PATH=$GITHUB_WORKSPACE/toolchain/clang-host/clang-r596125/bin:$PATH
