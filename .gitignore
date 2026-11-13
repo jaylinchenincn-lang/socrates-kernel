@@ -2,6 +2,9 @@
 *.zip
 *.tar
 *.tar.gz
+*.bat
+*.py
+*.log
 out/
 toolchain/
 downloaded/
