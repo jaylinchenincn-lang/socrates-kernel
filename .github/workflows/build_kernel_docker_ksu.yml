@@ -1,6 +1,8 @@
 name: Build LineageOS 24.0 Socrates Kernel (Docker + KernelSU)
 
 on:
+  push:
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       ksu_branch:
