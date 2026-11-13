@@ -86,7 +86,7 @@ jobs:
           test -d drivers/kernelsu || (echo "KernelSU directory missing!" && exit 1)
           grep -q "CONFIG_KSU" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
 
-      - name: Configure Kernel (Solution B: Stock + kABI-Safe SysVIPC + Namespaces + KSU + ThinLTO)
+      - name: "Configure Kernel (Solution B - Stock + kABI-Safe SysVIPC + Namespaces + KSU + ThinLTO)"
         run: |
           cd $GITHUB_WORKSPACE/android/kernel
           mkdir -p out
