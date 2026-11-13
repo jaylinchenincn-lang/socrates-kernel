@@ -90,7 +90,7 @@ make $MAKE_ARGS gki_defconfig
 make $MAKE_ARGS vendor/kalama_GKI.config
 make $MAKE_ARGS vendor/socrates_GKI.config
 
-# Force ensure Docker configs remain enabled
+# Force ensure Docker configs remain enabled and ThinLTO is used
 scripts/config --file out/.config \
     -e CONFIG_PID_NS \
     -e CONFIG_IPC_NS \
@@ -99,7 +99,9 @@ scripts/config --file out/.config \
     -e CONFIG_NETFILTER_XT_MATCH_ADDRTYPE \
     -e CONFIG_BRIDGE_NETFILTER \
     -e CONFIG_POSIX_MQUEUE \
-    -e CONFIG_KSU
+    -e CONFIG_KSU \
+    -d CONFIG_LTO_CLANG_FULL \
+    -e CONFIG_LTO_CLANG_THIN
 
 make $MAKE_ARGS olddefconfig
 make $MAKE_ARGS -j$(nproc) Image modules

@@ -25,6 +25,7 @@ jobs:
         with:
           root-reserve-mb: 8192
           temp-reserve-mb: 4096
+          swap-size-mb: 10240
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
@@ -130,7 +131,7 @@ jobs:
           make $MAKE_ARGS vendor/kalama_GKI.config
           make $MAKE_ARGS vendor/socrates_GKI.config
           
-          # Re-apply Docker configs after defconfig merge
+          # Re-apply Docker configs and ThinLTO optimization after defconfig merge
           scripts/config --file out/.config \
             -e CONFIG_PID_NS \
             -e CONFIG_IPC_NS \
@@ -139,7 +140,9 @@ jobs:
             -e CONFIG_NETFILTER_XT_MATCH_ADDRTYPE \
             -e CONFIG_BRIDGE_NETFILTER \
             -e CONFIG_POSIX_MQUEUE \
-            -e CONFIG_KSU
+            -e CONFIG_KSU \
+            -d CONFIG_LTO_CLANG_FULL \
+            -e CONFIG_LTO_CLANG_THIN
           
           make $MAKE_ARGS olddefconfig
           
