@@ -1,0 +1,176 @@
+name: Build LineageOS 24.0 Socrates Kernel (Solution B - DroidSpaces kABI Patch)
+
+on:
+  push:
+    paths:
+      - '.github/workflows/build_kernel_solution_b_kabi.yml'
+      - 'patches/**'
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Solution B (kABI Patch + DroidSpaces Containers)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+
+    steps:
+      - name: Maximize Build Space
+        uses: easimon/maximize-build-space@master
+        with:
+          root-reserve-mb: 10240
+          swap-size-mb: 10240
+          remove-dotnet: 'true'
+          remove-android: 'true'
+          remove-haskell: 'true'
+          remove-codeql: 'true'
+          remove-docker-images: 'true'
+
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Purge Ubuntu Multiarch APT Conflicts
+        run: |
+          sudo apt-get remove -y --allow-remove-essential gcc-multilib g++-multilib gcc-11-multilib g++-11-multilib || true
+          sudo apt-get autoremove -y || true
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            git ccache automake flex lzop bison \
+            bc build-essential libelf-dev libssl-dev libncurses-dev \
+            libxml2-dev zlib1g-dev bzip2 libbz2-dev libbz2-1.0 \
+            libghc-bzlib-dev squashfs-tools pngcrush schedtool \
+            dpkg-dev liblz4-tool make optipng \
+            binutils-aarch64-linux-gnu curl wget tar zip unzip patch
+
+      - name: Setup Official AOSP Clang 22.0.2 Toolchain (r596125)
+        env:
+          GIT_TERMINAL_PROMPT: 0
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/toolchain/clang-host
+          cd $GITHUB_WORKSPACE/toolchain/clang-host
+          echo "Cloning official AOSP Clang r596125 via sparse-checkout..."
+          git clone --depth 1 --filter=blob:none --sparse https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86 clang-host-repo
+          cd clang-host-repo
+          git sparse-checkout set clang-r596125
+          mv clang-r596125 $GITHUB_WORKSPACE/toolchain/clang-host/
+          cd $GITHUB_WORKSPACE/toolchain/clang-host
+          rm -rf clang-host-repo
+          $GITHUB_WORKSPACE/toolchain/clang-host/clang-r596125/bin/clang --version
+
+      - name: Clone Official LineageOS 24.0 Kernel Source (Locked Commit g27eb14b66c42)
+        env:
+          GIT_TERMINAL_PROMPT: 0
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/android
+          cd $GITHUB_WORKSPACE/android
+          echo "Cloning android_kernel_xiaomi_sm8550..."
+          git clone https://github.com/LineageOS/android_kernel_xiaomi_sm8550.git kernel
+          cd kernel
+          git checkout 27eb14b66c42ea075e437dc04d822182d242a086
+          echo "-g27eb14b66c42" > .scmversion
+          echo "Locked commit: $(git rev-parse HEAD)"
+
+      - name: Apply DroidSpaces-OSS kABI Padding Patch
+        run: |
+          cd $GITHUB_WORKSPACE/android/kernel
+          echo "Applying 001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch..."
+          patch -p1 < $GITHUB_WORKSPACE/patches/001.GKI-below-6.12-fix_sysvipc_kabi_6_7_8.patch
+          echo "Checking patch application status..."
+          git status
+          git diff include/linux/sched.h
+
+      - name: Integrate KernelSU-Next (In-Tree Driver)
+        run: |
+          cd $GITHUB_WORKSPACE/android/kernel
+          echo "Injecting KernelSU-Next into kernel tree..."
+          curl -LSs "https://raw.githubusercontent.com/Kernel-SU/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+          test -d drivers/kernelsu || (echo "KernelSU directory missing!" && exit 1)
+          grep -q "CONFIG_KSU" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+
+      - name: Configure Kernel (Solution B: Stock + kABI-Safe SysVIPC + Namespaces + KSU + ThinLTO)
+        run: |
+          cd $GITHUB_WORKSPACE/android/kernel
+          mkdir -p out
+          
+          # 1. Copy 100% verified stock config extracted from running phone
+          cp $GITHUB_WORKSPACE/socrates_stock_defconfig out/.config
+          
+          # 2. Inject kABI-Safe DroidSpaces container options (preserve task_struct offsets)
+          scripts/config --file out/.config \
+            -e CONFIG_SYSVIPC \
+            -e CONFIG_POSIX_MQUEUE \
+            -e CONFIG_IPC_NS \
+            -e CONFIG_PID_NS \
+            -e CONFIG_USER_NS \
+            -e CONFIG_DEVTMPFS \
+            -e CONFIG_DEVTMPFS_MOUNT \
+            -e CONFIG_KSU \
+            -e CONFIG_CFI_PERMISSIVE \
+            -d CONFIG_LTO_CLANG_FULL \
+            -e CONFIG_LTO_CLANG_THIN \
+            -d CONFIG_CFS_BANDWIDTH \
+            -d CONFIG_CGROUP_PIDS \
+            -d CONFIG_CGROUP_DEVICE
+          
+          export PATH=$GITHUB_WORKSPACE/toolchain/clang-host/clang-r596125/bin:$PATH
+          MAKE_ARGS="O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-"
+          make $MAKE_ARGS olddefconfig
+          
+          # Validate critical configuration lines
+          grep -E "(CONFIG_SYSVIPC|CONFIG_POSIX_MQUEUE|CONFIG_IPC_NS|CONFIG_PID_NS|CONFIG_USER_NS|CONFIG_KSU|CONFIG_CFI_PERMISSIVE|CONFIG_LTO_CLANG_THIN)=y" out/.config
+
+      - name: Compile Kernel Image & Modules
+        run: |
+          export PATH=$GITHUB_WORKSPACE/toolchain/clang-host/clang-r596125/bin:$PATH
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export CC=clang
+          export CLANG_TRIPLE=aarch64-linux-gnu-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          
+          cd $GITHUB_WORKSPACE/android/kernel
+          MAKE_ARGS="O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-"
+          
+          echo "Starting kernel build (-j$(nproc))..."
+          free -h
+          make $MAKE_ARGS -j$(nproc) Image modules
+          free -h
+          
+          test -f out/arch/arm64/boot/Image || (echo "Kernel Image build failed!" && exit 1)
+          strings out/arch/arm64/boot/Image | grep -E "Linux version 5\.15\." | head -n 1
+
+      - name: Package Official AOSP Boot Image with AVB Footer
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/output_images
+          cp $GITHUB_WORKSPACE/android/kernel/out/arch/arm64/boot/Image $GITHUB_WORKSPACE/output_images/Image
+          
+          # 1. Use AOSP mkbootimg to generate standard Boot Header v4
+          python3 $GITHUB_WORKSPACE/tools/mkbootimg.py \
+            --header_version 4 \
+            --kernel $GITHUB_WORKSPACE/android/kernel/out/arch/arm64/boot/Image \
+            --os_version 17.0.0 \
+            --os_patch_level 2026-08 \
+            -o $GITHUB_WORKSPACE/boot-raw.img
+
+          # 2. Use AOSP avbtool to append 192MB physical partition and AVBf footer
+          python3 $GITHUB_WORKSPACE/tools/avbtool.py add_hash_footer \
+            --image $GITHUB_WORKSPACE/boot-raw.img \
+            --partition_size 201326592 \
+            --partition_name boot \
+            --algorithm NONE \
+            --salt 63b195203018f269e272ca8d8d7d1a847269d30281eae095b0558069f51edfcd \
+            --prop com.android.build.boot.os_version:17 \
+            --prop com.android.build.boot.fingerprint:Redmi/lineage_socrates/socrates:17/CP2A.260605.016/c313c7f9c9:userdebug/release-keys
+
+          # 3. Verify generated boot.img structure
+          python3 $GITHUB_WORKSPACE/tools/avbtool.py info_image --image $GITHUB_WORKSPACE/boot-raw.img
+          cp $GITHUB_WORKSPACE/boot-raw.img $GITHUB_WORKSPACE/output_images/boot.img
+          
+          cd $GITHUB_WORKSPACE/output_images
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: socrates-solution-b-kabi-build
+          path: ${{ github.workspace }}/output_images/*
