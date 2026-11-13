@@ -40,7 +40,7 @@ jobs:
             libxml2-dev zlib1g-dev bzip2 libbz2-dev libbz2-1.0 \
             libghc-bzlib-dev squashfs-tools pngcrush schedtool \
             dpkg-dev liblz4-tool make optipng \
-            binutils-aarch64-linux-gnu curl wget tar zip unzip patch
+            binutils-aarch64-linux-gnu curl wget tar zip unzip patch dwarves cpio
 
       - name: Setup Official AOSP Clang 22.0.2 Toolchain (r596125)
         env:
@@ -110,7 +110,9 @@ jobs:
             -e CONFIG_LTO_CLANG_THIN \
             -d CONFIG_CFS_BANDWIDTH \
             -d CONFIG_CGROUP_PIDS \
-            -d CONFIG_CGROUP_DEVICE
+            -d CONFIG_CGROUP_DEVICE \
+            -d CONFIG_DEBUG_INFO_BTF \
+            -d CONFIG_DEBUG_INFO_BTF_MODULES
           
           export PATH=$GITHUB_WORKSPACE/toolchain/clang-host/clang-r596125/bin:$PATH
           MAKE_ARGS="O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-"
