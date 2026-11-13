@@ -4,6 +4,7 @@
 *.tar.gz
 *.bat
 *.py
+!tools/*.py
 *.log
 out/
 toolchain/

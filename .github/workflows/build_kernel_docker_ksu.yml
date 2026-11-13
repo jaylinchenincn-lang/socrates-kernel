@@ -180,6 +180,28 @@ jobs:
           cp $GITHUB_WORKSPACE/android/kernel/out/arch/arm64/boot/Image $GITHUB_WORKSPACE/output_images/Image
           cp $GITHUB_WORKSPACE/LineageOS-24.0-socrates-KernelSU-Docker.zip $GITHUB_WORKSPACE/output_images/
           
+          # 1. Use AOSP mkbootimg to generate standard Boot Header v4
+          python3 $GITHUB_WORKSPACE/tools/mkbootimg.py \
+            --header_version 4 \
+            --kernel $GITHUB_WORKSPACE/android/kernel/out/arch/arm64/boot/Image \
+            --os_version 17.0.0 \
+            --os_patch_level 2026-08 \
+            -o $GITHUB_WORKSPACE/boot-raw.img
+
+          # 2. Use AOSP avbtool to append 192MB physical partition and AVBf footer
+          python3 $GITHUB_WORKSPACE/tools/avbtool.py add_hash_footer \
+            --image $GITHUB_WORKSPACE/boot-raw.img \
+            --partition_size 201326592 \
+            --partition_name boot \
+            --algorithm NONE \
+            --salt 63b195203018f269e272ca8d8d7d1a847269d30281eae095b0558069f51edfcd \
+            --prop com.android.build.boot.os_version:17 \
+            --prop com.android.build.boot.fingerprint:Redmi/lineage_socrates/socrates:17/CP2A.260605.016/c313c7f9c9:userdebug/release-keys
+
+          # 3. Verify generated boot.img structure
+          python3 $GITHUB_WORKSPACE/tools/avbtool.py info_image --image $GITHUB_WORKSPACE/boot-raw.img
+          cp $GITHUB_WORKSPACE/boot-raw.img $GITHUB_WORKSPACE/output_images/boot.img
+          
           # Copy any built modules if available
           if [ -d "$GITHUB_WORKSPACE/android/modules/out" ]; then
             find $GITHUB_WORKSPACE/android/modules/out -name "*.ko" -exec cp {} $GITHUB_WORKSPACE/output_images/ \;
