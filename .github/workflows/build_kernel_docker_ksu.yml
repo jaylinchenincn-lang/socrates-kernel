@@ -37,9 +37,12 @@ jobs:
             bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
             git gnupg gperf libxml2 libxml2-utils lzop pngcrush rsync schedtool \
             squashfs-tools xsltproc zip zlib1g-dev python3 libssl-dev libncurses5-dev \
-            pkg-config libelf-dev libfl-dev dwarves cpio erofs-utils
+            pkg-config libelf-dev libfl-dev dwarves cpio erofs-utils \
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
 
       - name: Setup AOSP Clang Toolchain
+        env:
+          GIT_TERMINAL_PROMPT: 0
         run: |
           mkdir -p $GITHUB_WORKSPACE/toolchain
           cd $GITHUB_WORKSPACE/toolchain
@@ -114,16 +117,18 @@ jobs:
           export SUBARCH=arm64
           export CC=clang
           export CLANG_TRIPLE=aarch64-linux-gnu-
-          export CROSS_COMPILE=aarch64-linux-android-
-          export CROSS_COMPILE_ARM32=arm-linux-androideabi-
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
           
           cd $GITHUB_WORKSPACE/android/kernel
           mkdir -p out
           
+          MAKE_ARGS="O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-"
+          
           echo "Generating defconfig (gki_defconfig + vendor configs)..."
-          make O=out gki_defconfig
-          make O=out vendor/kalama_GKI.config
-          make O=out vendor/socrates_GKI.config
+          make $MAKE_ARGS gki_defconfig
+          make $MAKE_ARGS vendor/kalama_GKI.config
+          make $MAKE_ARGS vendor/socrates_GKI.config
           
           # Re-apply Docker configs after defconfig merge
           scripts/config --file out/.config \
@@ -136,10 +141,10 @@ jobs:
             -e CONFIG_POSIX_MQUEUE \
             -e CONFIG_KSU
           
-          make O=out olddefconfig
+          make $MAKE_ARGS olddefconfig
           
           echo "Starting kernel build (-j$(nproc))..."
-          make O=out -j$(nproc) Image modules
+          make $MAKE_ARGS -j$(nproc) Image modules
           
           # Check kernel binary output
           test -f out/arch/arm64/boot/Image || (echo "Kernel Image build failed!" && exit 1)
@@ -151,7 +156,7 @@ jobs:
           
           cd $GITHUB_WORKSPACE/android/modules
           echo "Building out-of-tree vendor modules against new kernel headers..."
-          make -j$(nproc) KERNEL_SRC=$KERNEL_SRC OUT_DIR=$GITHUB_WORKSPACE/android/modules/out modules || true
+          make -j$(nproc) ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- KERNEL_SRC=$KERNEL_SRC OUT_DIR=$GITHUB_WORKSPACE/android/modules/out modules || true
 
       - name: Package AnyKernel3 Flashable Zip
         run: |
