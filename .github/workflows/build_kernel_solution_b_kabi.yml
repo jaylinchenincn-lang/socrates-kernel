@@ -138,6 +138,25 @@ jobs:
           test -f out/arch/arm64/boot/Image || (echo "Kernel Image build failed!" && exit 1)
           strings out/arch/arm64/boot/Image | grep -E "Linux version 5\.15\." | head -n 1
 
+      - name: Package AnyKernel3 Flashable Zip
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/output_images
+          cd $GITHUB_WORKSPACE
+          git clone https://github.com/Kernel-SU/AnyKernel3.git AnyKernel3
+          cd AnyKernel3
+          
+          # Configure AnyKernel3 for socrates
+          sed -i 's/device.name1=.*/device.name1=socrates/g' anykernel.sh
+          sed -i 's/device.name2=.*/device.name2=socrates_in/g' anykernel.sh
+          sed -i 's/block=\/dev\/block\/bootdevice\/by-name\/boot;/block=auto;/g' anykernel.sh
+          sed -i 's/is_slot_device=0;/is_slot_device=auto;/g' anykernel.sh
+          
+          # Copy compiled kernel Image
+          cp $GITHUB_WORKSPACE/android/kernel/out/arch/arm64/boot/Image .
+          
+          # Create zip
+          zip -r9 $GITHUB_WORKSPACE/output_images/LineageOS-24.0-socrates-SolutionB-kABI-Docker.zip * -x .git README.md *placeholder
+
       - name: Package Official AOSP Boot Image with AVB Footer
         run: |
           mkdir -p $GITHUB_WORKSPACE/output_images
