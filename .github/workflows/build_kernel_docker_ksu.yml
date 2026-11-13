@@ -95,7 +95,7 @@ jobs:
           test -d drivers/kernelsu || (echo "KernelSU directory missing!" && exit 1)
           grep -q "CONFIG_KSU" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
 
-      - name: Configure Kernel (Stock Baseline + Docker + KSU + Permissive CFI + ThinLTO)
+      - name: Configure Kernel (100% kABI-Safe Baseline + KSU-Next + Permissive CFI + ThinLTO)
         run: |
           cd $GITHUB_WORKSPACE/android/kernel
           mkdir -p out
@@ -103,18 +103,8 @@ jobs:
           # 1. Copy 100% verified stock config extracted from running phone
           cp $GITHUB_WORKSPACE/socrates_stock_defconfig out/.config
           
-          # 2. Inject Docker, KernelSU, Permissive CFI, and ThinLTO (Memory & CI Optimization)
+          # 2. Inject KernelSU, Permissive CFI, and ThinLTO (Strict kABI Preservation)
           scripts/config --file out/.config \
-            -e CONFIG_PID_NS \
-            -e CONFIG_IPC_NS \
-            -e CONFIG_USER_NS \
-            -e CONFIG_CGROUP_DEVICE \
-            -e CONFIG_NETFILTER_XT_MATCH_ADDRTYPE \
-            -e CONFIG_BRIDGE_NETFILTER \
-            -e CONFIG_POSIX_MQUEUE \
-            -e CONFIG_IP_SET \
-            -e CONFIG_IP_SET_HASH_IP \
-            -e CONFIG_IP_SET_HASH_NET \
             -e CONFIG_KSU \
             -e CONFIG_CFI_PERMISSIVE \
             -d CONFIG_LTO_CLANG_FULL \
@@ -125,7 +115,7 @@ jobs:
           make $MAKE_ARGS olddefconfig
           
           # Validate critical configuration lines
-          grep -E "(CONFIG_PID_NS|CONFIG_KSU|CONFIG_CFI_PERMISSIVE|CONFIG_STACKPROTECTOR_PER_TASK|CONFIG_LTO_CLANG_THIN)=y" out/.config
+          grep -E "(CONFIG_KSU|CONFIG_CFI_PERMISSIVE|CONFIG_STACKPROTECTOR_PER_TASK|CONFIG_LTO_CLANG_THIN)=y" out/.config
 
       - name: Compile Kernel Image & Modules
         run: |
