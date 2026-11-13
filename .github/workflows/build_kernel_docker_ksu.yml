@@ -90,8 +90,9 @@ jobs:
       - name: Integrate KernelSU-Next (In-Tree CONFIG_KSU=y)
         run: |
           cd $GITHUB_WORKSPACE/android/kernel
-          echo "Integrating KernelSU-Next (${{ github.event.inputs.ksu_branch }})..."
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/${{ github.event.inputs.ksu_branch }}/kernel/setup.sh" | bash -s ${{ github.event.inputs.ksu_branch }}
+          KSU_BRANCH="${{ github.event.inputs.ksu_branch || 'next' }}"
+          echo "Integrating KernelSU-Next ($KSU_BRANCH)..."
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/${KSU_BRANCH}/kernel/setup.sh" | bash -s "${KSU_BRANCH}"
           
           # Verify driver integration
           test -d drivers/kernelsu || (echo "KernelSU directory missing!" && exit 1)
