@@ -148,48 +148,6 @@ jobs:
           test -f out/arch/arm64/boot/Image || (echo "Kernel Image build failed!" && exit 1)
           strings out/arch/arm64/boot/Image | grep -E "Linux version 5\.15\." | head -n 1
 
-      - name: Build SM8550 Vendor Modules (kABI Synchronized)
-        run: |
-          export PATH=$GITHUB_WORKSPACE/toolchain/clang-host/clang-r596125/bin:$PATH
-          export KERNEL_SRC=$GITHUB_WORKSPACE/android/kernel/out
-          
-          cd $GITHUB_WORKSPACE/android/modules
-          echo "Building out-of-tree vendor modules against synchronized kernel headers..."
-          
-          MODULES_LIST="qcom/opensource/mmrm-driver \
-            qcom/opensource/mm-drivers/hw_fence \
-            qcom/opensource/mm-drivers/msm_ext_display \
-            qcom/opensource/mm-drivers/sync_fence \
-            qcom/opensource/audio-kernel \
-            qcom/opensource/camera-kernel \
-            qcom/opensource/dataipa/drivers/platform/msm \
-            qcom/opensource/datarmnet/core \
-            qcom/opensource/datarmnet-ext/aps \
-            qcom/opensource/datarmnet-ext/offload \
-            qcom/opensource/datarmnet-ext/shs \
-            qcom/opensource/datarmnet-ext/perf \
-            qcom/opensource/datarmnet-ext/perf_tether \
-            qcom/opensource/datarmnet-ext/sch \
-            qcom/opensource/datarmnet-ext/wlan \
-            qcom/opensource/securemsm-kernel \
-            qcom/opensource/display-drivers/msm \
-            qcom/opensource/eva-kernel \
-            qcom/opensource/video-driver \
-            qcom/opensource/graphics-kernel \
-            qcom/opensource/wlan/platform \
-            qcom/opensource/wlan/qcacld-3.0/.kiwi_v2 \
-            qcom/opensource/bt-kernel \
-            nxp/opensource/driver"
-            
-          mkdir -p $GITHUB_WORKSPACE/android/modules/out
-          for mod in $MODULES_LIST; do
-            if [ -d "$mod" ]; then
-              echo ">>> Compiling module $mod..."
-              make -C $KERNEL_SRC M=$GITHUB_WORKSPACE/android/modules/$mod ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- modules || true
-              find $GITHUB_WORKSPACE/android/modules/$mod -name "*.ko" -exec cp {} $GITHUB_WORKSPACE/android/modules/out/ \; || true
-            fi
-          done
-
       - name: Package AnyKernel3 Flashable Zip
         run: |
           cd $GITHUB_WORKSPACE
@@ -201,30 +159,22 @@ jobs:
           sed -i 's/device.name2=.*/device.name2=socrates_in/g' anykernel.sh
           sed -i 's/block=\/dev\/block\/bootdevice\/by-name\/boot;/block=auto;/g' anykernel.sh
           sed -i 's/is_slot_device=0;/is_slot_device=auto;/g' anykernel.sh
-          sed -i 's/do.modules=0;/do.modules=1;/g' anykernel.sh
+          # Strictly lock do.modules=0 to preserve official stock vendor_dlkm partition
+          sed -i 's/do.modules=.*/do.modules=0;/g' anykernel.sh
           
           # Copy compiled kernel Image
           cp $GITHUB_WORKSPACE/android/kernel/out/arch/arm64/boot/Image .
           
-          # Copy synchronized vendor modules into AnyKernel3
-          mkdir -p modules/vendor_dlkm
-          if [ -d "$GITHUB_WORKSPACE/android/modules/out" ]; then
-            find $GITHUB_WORKSPACE/android/modules/out -name "*.ko" -exec cp {} modules/vendor_dlkm/ \; || true
-          fi
-          find $GITHUB_WORKSPACE/android/kernel/out -name "*.ko" -exec cp {} modules/vendor_dlkm/ \; || true
-          
           # Create zip
           zip -r9 $GITHUB_WORKSPACE/LineageOS-24.0-socrates-KernelSU-Docker.zip * -x .git README.md *placeholder
 
-      - name: Package Triad Partition Images (boot, vendor_boot, vendor_dlkm)
+      - name: Package Official GKI Boot Image (Header v4 + AVB Hash Footer)
         run: |
           mkdir -p $GITHUB_WORKSPACE/output_images
           cp $GITHUB_WORKSPACE/android/kernel/out/arch/arm64/boot/Image $GITHUB_WORKSPACE/output_images/Image
           cp $GITHUB_WORKSPACE/LineageOS-24.0-socrates-KernelSU-Docker.zip $GITHUB_WORKSPACE/output_images/
           
-          # ==========================================================
-          # 1. 生成官方规范的 Boot Header v4 物理 boot.img (带 AVB Footer)
-          # ==========================================================
+          # 1. Use AOSP mkbootimg to generate standard Boot Header v4
           python3 $GITHUB_WORKSPACE/tools/mkbootimg.py \
             --header_version 4 \
             --kernel $GITHUB_WORKSPACE/android/kernel/out/arch/arm64/boot/Image \
@@ -232,6 +182,7 @@ jobs:
             --os_patch_level 2026-11 \
             -o $GITHUB_WORKSPACE/boot-raw.img
 
+          # 2. Use AOSP avbtool to append 192MB physical partition and AVBf footer
           python3 $GITHUB_WORKSPACE/tools/avbtool.py add_hash_footer \
             --image $GITHUB_WORKSPACE/boot-raw.img \
             --partition_size 201326592 \
@@ -241,61 +192,16 @@ jobs:
             --prop com.android.build.boot.os_version:17 \
             --prop com.android.build.boot.fingerprint:Redmi/lineage_socrates/socrates:17/CP2A.260605.016/c313c7f9c9:userdebug/release-keys
 
+          python3 $GITHUB_WORKSPACE/tools/avbtool.py info_image --image $GITHUB_WORKSPACE/boot-raw.img
           cp $GITHUB_WORKSPACE/boot-raw.img $GITHUB_WORKSPACE/output_images/boot.img
-          
-          # ==========================================================
-          # 2. 构建带标准 SELinux 与 depmod 符号树的物理 vendor_dlkm.img (EROFS)
-          # ==========================================================
-          echo "Assembling vendor_dlkm filesystem root..."
-          DLKM_ROOT=$GITHUB_WORKSPACE/dlkm_staging
-          KVER="5.15.220-g27eb14b66c42"
-          MODULES_DIR=$DLKM_ROOT/lib/modules/$KVER
-          mkdir -p $MODULES_DIR
-          
-          # 收集所有已编译的外部模块与内置模块
-          find $GITHUB_WORKSPACE/android/modules/out -name "*.ko" -exec cp {} $MODULES_DIR/ \;
-          find $GITHUB_WORKSPACE/android/kernel/out -name "*.ko" -exec cp {} $MODULES_DIR/ \;
-          
-          # 运行 depmod 生成标准内核依赖表
-          echo "Running depmod against $KVER with kernel symbols..."
-          depmod -b $DLKM_ROOT -F $GITHUB_WORKSPACE/android/kernel/out/System.map $KVER
-          
-          # 顶层建立软链接与 modules.* 副本，确保 Android 各种路径兼容性
-          cd $DLKM_ROOT/lib/modules
-          cp $KVER/modules.* .
-          for f in $KVER/*.ko; do
-            ln -s "$KVER/$(basename "$f")" "$(basename "$f")" 2>/dev/null || cp "$f" .
-          done
-          cd $GITHUB_WORKSPACE
-          
-          # 生成合规的标准 SELinux file_contexts 规则表
-          cat << 'EOF' > $GITHUB_WORKSPACE/dlkm_file_contexts
-          /.*                                               u:object_r:vendor_file:s0
-          /lib/modules(/.*)?                                u:object_r:vendor_file:s0
-          /lib/modules/[0-9]+\.[0-9]+\.[0-9]+.*(/.*)?       u:object_r:vendor_file:s0
-          EOF
-          
-          # 使用 mkfs.erofs 压缩打包生成物理 vendor_dlkm.img
-          echo "Packaging vendor_dlkm.img with mkfs.erofs..."
-          mkfs.erofs --file-contexts=$GITHUB_WORKSPACE/dlkm_file_contexts \
-                     -z lz4hc \
-                     $GITHUB_WORKSPACE/output_images/vendor_dlkm.img \
-                     $DLKM_ROOT
-          
-          # ==========================================================
-          # 3. 输出一键刷写脚本 flash_root.bat 与 flash_root.sh
-          # ==========================================================
+
+          # 3. Output simple one-click flashing scripts
           cat << 'EOF' > $GITHUB_WORKSPACE/output_images/flash_root.bat
           @echo off
-          echo [*] Flashing KernelSU-Next boot.img in Fastboot mode...
+          echo [*] Flashing KernelSU-Next boot.img for Redmi K60 Pro (socrates)...
           fastboot flash boot boot.img
           if %errorlevel% neq 0 (echo [!] Flash boot error & pause & exit /b 1)
-          echo [*] Transitioning to FastbootD mode for logical partition...
-          fastboot reboot fastboot
-          echo [*] Flashing vendor_dlkm.img in FastbootD mode...
-          fastboot flash vendor_dlkm vendor_dlkm.img
-          if %errorlevel% neq 0 (echo [!] Flash vendor_dlkm error & pause & exit /b 1)
-          echo [OK] Success! Rebooting to LineageOS...
+          echo [OK] Flashing completed successfully! Rebooting to LineageOS...
           fastboot reboot
           pause
           EOF
@@ -303,13 +209,9 @@ jobs:
           cat << 'EOF' > $GITHUB_WORKSPACE/output_images/flash_root.sh
           #!/bin/bash
           set -e
-          echo "[*] Flashing KernelSU-Next boot.img in Fastboot mode..."
+          echo "[*] Flashing KernelSU-Next boot.img for Redmi K60 Pro (socrates)..."
           fastboot flash boot boot.img
-          echo "[*] Transitioning to FastbootD mode for logical partition..."
-          fastboot reboot fastboot
-          echo "[*] Flashing vendor_dlkm.img in FastbootD mode..."
-          fastboot flash vendor_dlkm vendor_dlkm.img
-          echo "[OK] Success! Rebooting to LineageOS..."
+          echo "[OK] Flashing completed successfully! Rebooting to LineageOS..."
           fastboot reboot
           EOF
           chmod +x $GITHUB_WORKSPACE/output_images/flash_root.sh
