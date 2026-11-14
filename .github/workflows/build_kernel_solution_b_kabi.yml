@@ -17,9 +17,8 @@ jobs:
       - name: Maximize Build Space
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 25600
-          temp-reserve-mb: 2048
-          swap-size-mb: 16384
+          root-reserve-mb: 10240
+          swap-size-mb: 10240
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
@@ -40,7 +39,7 @@ jobs:
             libxml2-dev zlib1g-dev bzip2 libbz2-dev libbz2-1.0 \
             libghc-bzlib-dev squashfs-tools pngcrush schedtool \
             dpkg-dev liblz4-tool make optipng \
-            binutils-aarch64-linux-gnu curl wget tar zip unzip patch dwarves cpio
+            binutils-aarch64-linux-gnu curl wget tar zip unzip patch
 
       - name: Setup Official AOSP Clang 22.0.2 Toolchain (r596125)
         env:
@@ -83,11 +82,11 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/android/kernel
           echo "Injecting KernelSU-Next into kernel tree..."
-          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+          curl -LSs "https://raw.githubusercontent.com/Kernel-SU/KernelSU-Next/next/kernel/setup.sh" | bash -s next
           test -d drivers/kernelsu || (echo "KernelSU directory missing!" && exit 1)
           grep -q "CONFIG_KSU" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
 
-      - name: "Configure Kernel (Solution B - Stock Full LTO + kABI-Safe SysVIPC + Namespaces + KSU)"
+      - name: "Configure Kernel (Solution B - Stock + kABI-Safe SysVIPC + Namespaces + KSU + ThinLTO)"
         run: |
           cd $GITHUB_WORKSPACE/android/kernel
           mkdir -p out
@@ -95,7 +94,7 @@ jobs:
           # 1. Copy 100% verified stock config extracted from running phone
           cp $GITHUB_WORKSPACE/socrates_stock_defconfig out/.config
           
-          # 2. Inject kABI-Safe DroidSpaces container options (preserve task_struct offsets & Full LTO DLKM CRC compatibility)
+          # 2. Inject kABI-Safe DroidSpaces container options (preserve task_struct offsets)
           scripts/config --file out/.config \
             -e CONFIG_SYSVIPC \
             -e CONFIG_POSIX_MQUEUE \
@@ -104,14 +103,21 @@ jobs:
             -e CONFIG_USER_NS \
             -e CONFIG_DEVTMPFS \
             -e CONFIG_DEVTMPFS_MOUNT \
-            -e CONFIG_KSU
+            -e CONFIG_KSU \
+            -d CONFIG_LTO_CLANG_FULL \
+            -e CONFIG_LTO_CLANG_THIN \
+            -d CONFIG_CFS_BANDWIDTH \
+            -d CONFIG_CGROUP_PIDS \
+            -d CONFIG_CGROUP_DEVICE \
+            -d CONFIG_DEBUG_INFO_BTF \
+            -d CONFIG_DEBUG_INFO_BTF_MODULES
           
           export PATH=$GITHUB_WORKSPACE/toolchain/clang-host/clang-r596125/bin:$PATH
           MAKE_ARGS="O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-"
           make $MAKE_ARGS olddefconfig
           
           # Validate critical configuration lines
-          grep -E "(CONFIG_SYSVIPC|CONFIG_POSIX_MQUEUE|CONFIG_IPC_NS|CONFIG_PID_NS|CONFIG_USER_NS|CONFIG_KSU|CONFIG_LTO_CLANG_FULL|CONFIG_CFI_CLANG)=y" out/.config
+          grep -E "(CONFIG_SYSVIPC|CONFIG_POSIX_MQUEUE|CONFIG_IPC_NS|CONFIG_PID_NS|CONFIG_USER_NS|CONFIG_KSU|CONFIG_LTO_CLANG_THIN)=y" out/.config
 
       - name: Compile Kernel Image & Modules
         run: |
@@ -132,25 +138,6 @@ jobs:
           
           test -f out/arch/arm64/boot/Image || (echo "Kernel Image build failed!" && exit 1)
           strings out/arch/arm64/boot/Image | grep -E "Linux version 5\.15\." | head -n 1
-
-      - name: Package AnyKernel3 Flashable Zip
-        run: |
-          mkdir -p $GITHUB_WORKSPACE/output_images
-          cd $GITHUB_WORKSPACE
-          git clone https://github.com/Kernel-SU/AnyKernel3.git AnyKernel3
-          cd AnyKernel3
-          
-          # Configure AnyKernel3 for socrates
-          sed -i 's/device.name1=.*/device.name1=socrates/g' anykernel.sh
-          sed -i 's/device.name2=.*/device.name2=socrates_in/g' anykernel.sh
-          sed -i 's/block=\/dev\/block\/bootdevice\/by-name\/boot;/block=auto;/g' anykernel.sh
-          sed -i 's/is_slot_device=0;/is_slot_device=auto;/g' anykernel.sh
-          
-          # Copy compiled kernel Image
-          cp $GITHUB_WORKSPACE/android/kernel/out/arch/arm64/boot/Image .
-          
-          # Create zip
-          zip -r9 $GITHUB_WORKSPACE/output_images/LineageOS-24.0-socrates-SolutionB-kABI-Docker.zip * -x .git README.md *placeholder
 
       - name: Package Official AOSP Boot Image with AVB Footer
         run: |
