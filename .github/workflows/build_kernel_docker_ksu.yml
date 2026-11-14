@@ -98,7 +98,7 @@ jobs:
           test -d drivers/kernelsu || (echo "KernelSU directory missing!" && exit 1)
           grep -q "CONFIG_KSU" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
 
-      - name: Configure Kernel (Track A: 100% Stock Full LTO & CFI Baseline + KSU-Next)
+      - name: "Configure Kernel (Track A - 100% Stock Full LTO & CFI Baseline + KSU-Next)"
         run: |
           cd $GITHUB_WORKSPACE/android/kernel
           mkdir -p out
