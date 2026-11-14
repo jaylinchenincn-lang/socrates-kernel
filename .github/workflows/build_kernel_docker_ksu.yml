@@ -98,7 +98,7 @@ jobs:
           test -d drivers/kernelsu || (echo "KernelSU directory missing!" && exit 1)
           grep -q "CONFIG_KSU" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
 
-      - name: "Configure Kernel (Track A - 100% Stock Full LTO & CFI Baseline + KSU-Next)"
+      - name: "Configure Kernel (Track A - Stock ThinLTO Baseline + KSU-Next)"
         run: |
           cd $GITHUB_WORKSPACE/android/kernel
           mkdir -p out
@@ -106,16 +106,20 @@ jobs:
           # 1. Copy 100% verified stock config extracted from running phone
           cp $GITHUB_WORKSPACE/socrates_stock_defconfig out/.config
           
-          # 2. Inject KernelSU-Next (Maintain 100% Official Full LTO & strict CFI for DLKM module CRC compatibility)
+          # 2. Inject KernelSU-Next & ThinLTO (Official Android GKI standard for CI memory bounds)
           scripts/config --file out/.config \
-            -e CONFIG_KSU
+            -e CONFIG_KSU \
+            -d CONFIG_LTO_CLANG_FULL \
+            -e CONFIG_LTO_CLANG_THIN \
+            -d CONFIG_DEBUG_INFO_BTF \
+            -d CONFIG_DEBUG_INFO_BTF_MODULES
           
           export PATH=$GITHUB_WORKSPACE/toolchain/clang-host/clang-r596125/bin:$PATH
           MAKE_ARGS="O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-"
           make $MAKE_ARGS olddefconfig
           
           # Validate critical configuration lines
-          grep -E "(CONFIG_KSU|CONFIG_LTO_CLANG_FULL|CONFIG_CFI_CLANG)=y" out/.config
+          grep -E "(CONFIG_KSU|CONFIG_LTO_CLANG_THIN|CONFIG_CFI_CLANG)=y" out/.config
 
       - name: Compile Kernel Image & Modules
         run: |
