@@ -19,7 +19,7 @@ jobs:
         with:
           root-reserve-mb: 25600
           temp-reserve-mb: 2048
-          swap-size-mb: 4096
+          swap-size-mb: 16384
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
@@ -87,7 +87,7 @@ jobs:
           test -d drivers/kernelsu || (echo "KernelSU directory missing!" && exit 1)
           grep -q "CONFIG_KSU" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
 
-      - name: "Configure Kernel (Solution B - Stock + kABI-Safe SysVIPC + Namespaces + KSU + ThinLTO)"
+      - name: "Configure Kernel (Solution B - Stock Full LTO + kABI-Safe SysVIPC + Namespaces + KSU)"
         run: |
           cd $GITHUB_WORKSPACE/android/kernel
           mkdir -p out
@@ -95,7 +95,7 @@ jobs:
           # 1. Copy 100% verified stock config extracted from running phone
           cp $GITHUB_WORKSPACE/socrates_stock_defconfig out/.config
           
-          # 2. Inject kABI-Safe DroidSpaces container options (preserve task_struct offsets)
+          # 2. Inject kABI-Safe DroidSpaces container options (preserve task_struct offsets & Full LTO DLKM CRC compatibility)
           scripts/config --file out/.config \
             -e CONFIG_SYSVIPC \
             -e CONFIG_POSIX_MQUEUE \
@@ -104,22 +104,14 @@ jobs:
             -e CONFIG_USER_NS \
             -e CONFIG_DEVTMPFS \
             -e CONFIG_DEVTMPFS_MOUNT \
-            -e CONFIG_KSU \
-            -e CONFIG_CFI_PERMISSIVE \
-            -d CONFIG_LTO_CLANG_FULL \
-            -e CONFIG_LTO_CLANG_THIN \
-            -d CONFIG_CFS_BANDWIDTH \
-            -d CONFIG_CGROUP_PIDS \
-            -d CONFIG_CGROUP_DEVICE \
-            -d CONFIG_DEBUG_INFO_BTF \
-            -d CONFIG_DEBUG_INFO_BTF_MODULES
+            -e CONFIG_KSU
           
           export PATH=$GITHUB_WORKSPACE/toolchain/clang-host/clang-r596125/bin:$PATH
           MAKE_ARGS="O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-"
           make $MAKE_ARGS olddefconfig
           
           # Validate critical configuration lines
-          grep -E "(CONFIG_SYSVIPC|CONFIG_POSIX_MQUEUE|CONFIG_IPC_NS|CONFIG_PID_NS|CONFIG_USER_NS|CONFIG_KSU|CONFIG_CFI_PERMISSIVE|CONFIG_LTO_CLANG_THIN)=y" out/.config
+          grep -E "(CONFIG_SYSVIPC|CONFIG_POSIX_MQUEUE|CONFIG_IPC_NS|CONFIG_PID_NS|CONFIG_USER_NS|CONFIG_KSU|CONFIG_LTO_CLANG_FULL|CONFIG_CFI_CLANG)=y" out/.config
 
       - name: Compile Kernel Image & Modules
         run: |
