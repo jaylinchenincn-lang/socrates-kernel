@@ -25,9 +25,9 @@ jobs:
       - name: Maximize Build Space
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 25600
+          root-reserve-mb: 20480
           temp-reserve-mb: 4096
-          swap-size-mb: 16384
+          swap-size-mb: 20480
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
@@ -98,7 +98,7 @@ jobs:
           test -d drivers/kernelsu || (echo "KernelSU directory missing!" && exit 1)
           grep -q "CONFIG_KSU" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
 
-      - name: "Configure Kernel (Track A - Stock ThinLTO Baseline + KSU-Next)"
+      - name: "Configure Kernel (Track A - Official Full LTO Baseline + KSU-Next)"
         run: |
           cd $GITHUB_WORKSPACE/android/kernel
           mkdir -p out
@@ -106,11 +106,12 @@ jobs:
           # 1. Copy 100% verified stock config extracted from running phone
           cp $GITHUB_WORKSPACE/socrates_stock_defconfig out/.config
           
-          # 2. Inject KernelSU-Next & ThinLTO (Official Android GKI standard for CI memory bounds)
+          # 2. Inject KernelSU-Next & Permissive CFI, keeping 100% official Full LTO (Preserve DLKM module CRCs)
           scripts/config --file out/.config \
             -e CONFIG_KSU \
-            -d CONFIG_LTO_CLANG_FULL \
-            -e CONFIG_LTO_CLANG_THIN \
+            -e CONFIG_CFI_PERMISSIVE \
+            -e CONFIG_LTO_CLANG_FULL \
+            -d CONFIG_LTO_CLANG_THIN \
             -d CONFIG_DEBUG_INFO_BTF \
             -d CONFIG_DEBUG_INFO_BTF_MODULES
           
@@ -119,7 +120,7 @@ jobs:
           make $MAKE_ARGS olddefconfig
           
           # Validate critical configuration lines
-          grep -E "(CONFIG_KSU|CONFIG_LTO_CLANG_THIN|CONFIG_CFI_CLANG)=y" out/.config
+          grep -E "(CONFIG_KSU|CONFIG_LTO_CLANG_FULL|CONFIG_CFI_PERMISSIVE)=y" out/.config
 
       - name: Compile Kernel Image & Modules
         run: |
@@ -179,7 +180,7 @@ jobs:
             --header_version 4 \
             --kernel $GITHUB_WORKSPACE/android/kernel/out/arch/arm64/boot/Image \
             --os_version 17.0.0 \
-            --os_patch_level 2026-08 \
+            --os_patch_level 2026-11 \
             -o $GITHUB_WORKSPACE/boot-raw.img
 
           # 2. Use AOSP avbtool to append 192MB physical partition and AVBf footer
