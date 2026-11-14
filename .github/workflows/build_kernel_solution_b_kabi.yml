@@ -104,19 +104,20 @@ jobs:
             -e CONFIG_DEVTMPFS \
             -e CONFIG_DEVTMPFS_MOUNT \
             -e CONFIG_KSU \
-            -e CONFIG_CFI_PERMISSIVE \
             -d CONFIG_LTO_CLANG_FULL \
             -e CONFIG_LTO_CLANG_THIN \
             -d CONFIG_CFS_BANDWIDTH \
             -d CONFIG_CGROUP_PIDS \
-            -d CONFIG_CGROUP_DEVICE
+            -d CONFIG_CGROUP_DEVICE \
+            -d CONFIG_DEBUG_INFO_BTF \
+            -d CONFIG_DEBUG_INFO_BTF_MODULES
           
           export PATH=$GITHUB_WORKSPACE/toolchain/clang-host/clang-r596125/bin:$PATH
           MAKE_ARGS="O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-"
           make $MAKE_ARGS olddefconfig
           
           # Validate critical configuration lines
-          grep -E "(CONFIG_SYSVIPC|CONFIG_POSIX_MQUEUE|CONFIG_IPC_NS|CONFIG_PID_NS|CONFIG_USER_NS|CONFIG_KSU|CONFIG_CFI_PERMISSIVE|CONFIG_LTO_CLANG_THIN)=y" out/.config
+          grep -E "(CONFIG_SYSVIPC|CONFIG_POSIX_MQUEUE|CONFIG_IPC_NS|CONFIG_PID_NS|CONFIG_USER_NS|CONFIG_KSU|CONFIG_LTO_CLANG_THIN)=y" out/.config
 
       - name: Compile Kernel Image & Modules
         run: |
