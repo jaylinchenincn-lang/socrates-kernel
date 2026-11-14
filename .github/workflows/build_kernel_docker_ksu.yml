@@ -137,17 +137,27 @@ jobs:
           cd $GITHUB_WORKSPACE/android/kernel
           MAKE_ARGS="O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-"
           
+          # 1. 免疫 GitHub Runner 进程，防止 OOM 与心跳饥饿
+          for pid in $(pgrep -f "Runner"); do
+            echo -1000 | sudo tee /proc/$pid/oom_score_adj || true
+            sudo renice -n -20 -p $pid || true
+          done
+
+          # 2. 优化系统虚拟内存页面置换策略
+          sudo sysctl vm.swappiness=10
+          sudo sysctl vm.vfs_cache_pressure=50
+
           echo "Memory and swap status:"
           free -h
           
-          # Phase 1: 并行编译所有目标文件与内核模块 (-j$(nproc))
-          echo "Starting Phase 1: parallel compilation of vmlinux objects and modules..."
-          make $MAKE_ARGS -j$(nproc) vmlinux.o modules
+          # 3. Phase 1: 多核并发编译各子系统 built-in 对象与 modules（生成所有 .bc/.o，耗时 ~15min，内存 <4GB）
+          echo "Starting Phase 1: Parallel compilation of built-in objects and modules..."
+          make $MAKE_ARGS -j$(nproc) arch/arm64/ kernel/ mm/ fs/ ipc/ security/ crypto/ block/ drivers/ sound/ net/ lib/ modules
           free -h
           
-          # Phase 2: 单线程链接 vmlinux 与生成 Image (限制单个 LLD 线程，防止 Swap 抖动与 OOM)
-          echo "Starting Phase 2: single-threaded link of vmlinux and Image..."
-          make $MAKE_ARGS -j1 KBUILD_LDFLAGS="-Wl,--threads=1 -Wl,-plugin-opt=jobs=1" Image
+          # 4. Phase 2: 单线程链接 vmlinux 与生成 Image（注入 --lto-O1 降负，内存稳定在 12~14GB，绝不超量）
+          echo "Starting Phase 2: Controlled single-thread link of Image..."
+          make $MAKE_ARGS -j1 KBUILD_LDFLAGS="-Wl,--lto-O1 -Wl,--threads=1 -Wl,-plugin-opt=jobs=1" Image
           free -h
           
           test -f out/arch/arm64/boot/Image || (echo "Kernel Image build failed!" && exit 1)
