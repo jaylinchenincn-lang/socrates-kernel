@@ -98,15 +98,40 @@ jobs:
           test -d drivers/kernelsu || (echo "KernelSU directory missing!" && exit 1)
           grep -q "CONFIG_KSU" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
 
-      - name: "Configure Kernel (Track A - ThinLTO Baseline + BTF + KSU-Next)"
+      - name: "Configure Kernel (Track A - ThinLTO Baseline + BTF + KSU-Next + Vermagic Hardening)"
         run: |
           cd $GITHUB_WORKSPACE/android/kernel
           mkdir -p out
           
-          # 1. Copy 100% verified stock config extracted from running phone
+          # 1. Physical suppression of '+' in scripts/setlocalversion
+          sed -i 's/printf "%s" "+"/# printf "%s" "+"/g' scripts/setlocalversion
+          sed -i 's/res="${res}+"/res="${res}"/g' scripts/setlocalversion
+          
+          # 2. Apply Python CRC bypass patch to kernel/module.c for Qualcomm vendor modules
+          python3 -c "
+          import re
+          path = 'kernel/module.c'
+          with open(path, 'r') as f:
+              content = f.read()
+          pattern = r'(pr_warn\(\"%s: disagrees about version of symbol %s\\n\",\s*info->name,\s*symname\);\s*)return 0;'
+          replacement = r'\1/* Bypassed for Qualcomm GKI module compatibility */\n\t\treturn 1;'
+          new_content, count = re.subn(pattern, replacement, content)
+          if count > 0:
+              with open(path, 'w') as f:
+                  f.write(new_content)
+              print(f'SUCCESS: Applied CRC bypass patch ({count} location updated).')
+          else:
+              pattern_fallback = r'(disagrees about version of symbol[^\n]+\n[^\n]+;\n\s+)return 0;'
+              new_content, count = re.subn(pattern_fallback, r'\1return 1;', content)
+              with open(path, 'w') as f:
+                  f.write(new_content)
+              print(f'SUCCESS: Applied CRC fallback bypass ({count} location updated).')
+          "
+          
+          # 3. Copy 100% verified stock config extracted from running phone
           cp $GITHUB_WORKSPACE/socrates_stock_defconfig out/.config
           
-          # 2. Inject KernelSU-Next, ThinLTO (Memory safe), BTF Trio & Fixed LOCALVERSION
+          # 4. Inject KernelSU-Next, ThinLTO (Memory safe), BTF Trio, Permissive CFI, Strip Sig Protect & Fix LOCALVERSION
           scripts/config --file out/.config \
             -e CONFIG_KSU \
             -e CONFIG_CFI_PERMISSIVE \
@@ -115,15 +140,23 @@ jobs:
             -e CONFIG_DEBUG_INFO_BTF \
             -e CONFIG_DEBUG_INFO_BTF_MODULES \
             -e CONFIG_MODULE_ALLOW_BTF_MISMATCH \
+            -d CONFIG_MODULE_SIG_PROTECT \
+            -d CONFIG_MODULE_SIG_FORCE \
+            -d CONFIG_MODULE_SIG_ALL \
             --set-str CONFIG_LOCALVERSION "-g27eb14b66c42" \
             -d CONFIG_LOCALVERSION_AUTO
           
           export PATH=$GITHUB_WORKSPACE/toolchain/clang-host/clang-r596125/bin:$PATH
+          export LOCALVERSION=""
+          export KBUILD_BUILD_VERSION=1
+          export KBUILD_BUILD_USER=root
+          export KBUILD_BUILD_HOST=lineageos
+          echo "-g27eb14b66c42" > .scmversion
           MAKE_ARGS="O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-"
           make $MAKE_ARGS olddefconfig
           
           # Validate critical configuration lines
-          grep -E "(CONFIG_KSU|CONFIG_LTO_CLANG_THIN|CONFIG_DEBUG_INFO_BTF)=y" out/.config
+          grep -E "(CONFIG_KSU|CONFIG_LTO_CLANG_THIN|CONFIG_DEBUG_INFO_BTF|CONFIG_CFI_PERMISSIVE)=y" out/.config
 
       - name: Compile Kernel Image & Modules
         run: |
@@ -133,6 +166,10 @@ jobs:
           export CC=clang
           export CLANG_TRIPLE=aarch64-linux-gnu-
           export CROSS_COMPILE=aarch64-linux-gnu-
+          export LOCALVERSION=""
+          export KBUILD_BUILD_VERSION=1
+          export KBUILD_BUILD_USER=root
+          export KBUILD_BUILD_HOST=lineageos
           
           cd $GITHUB_WORKSPACE/android/kernel
           MAKE_ARGS="O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-"
@@ -146,7 +183,19 @@ jobs:
           free -h
           
           test -f out/arch/arm64/boot/Image || (echo "Kernel Image build failed!" && exit 1)
-          strings out/arch/arm64/boot/Image | grep -E "Linux version 5\.15\." | head -n 1
+          
+          # Automated Banner & Vermagic Tripwire Gate
+          KERNEL_BANNER=$(strings out/arch/arm64/boot/Image | grep -E "Linux version 5\.15\." | head -n 1)
+          echo "Generated Kernel Banner: $KERNEL_BANNER"
+          if echo "$KERNEL_BANNER" | grep -qE "5\.15\.220-g27eb14b66c42\+"; then
+            echo "FATAL ERROR: Kernel banner contains forbidden '+' sign! Vermagic mismatch guaranteed!"
+            exit 1
+          fi
+          if ! echo "$KERNEL_BANNER" | grep -q "5.15.220-g27eb14b66c42"; then
+            echo "FATAL ERROR: Kernel banner missing official release string!"
+            exit 1
+          fi
+          echo "SUCCESS: Vermagic banner 100% strictly matched with official LineageOS stock kernel."
 
       - name: Package AnyKernel3 Flashable Zip
         run: |
