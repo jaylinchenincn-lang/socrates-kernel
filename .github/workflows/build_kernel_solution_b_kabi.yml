@@ -17,8 +17,9 @@ jobs:
       - name: Maximize Build Space
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 10240
-          swap-size-mb: 10240
+          root-reserve-mb: 25600
+          temp-reserve-mb: 2048
+          swap-size-mb: 4096
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
@@ -82,7 +83,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/android/kernel
           echo "Injecting KernelSU-Next into kernel tree..."
-          curl -LSs "https://raw.githubusercontent.com/Kernel-SU/KernelSU-Next/next/kernel/setup.sh" | bash -s next
+          curl -LSs "https://raw.githubusercontent.com/KernelSU-Next/KernelSU-Next/next/kernel/setup.sh" | bash -s next
           test -d drivers/kernelsu || (echo "KernelSU directory missing!" && exit 1)
           grep -q "CONFIG_KSU" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
 
@@ -138,6 +139,17 @@ jobs:
           
           test -f out/arch/arm64/boot/Image || (echo "Kernel Image build failed!" && exit 1)
           strings out/arch/arm64/boot/Image | grep -E "Linux version 5\.15\." | head -n 1
+
+      - name: Package AnyKernel3 Flashable Zip
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/output_images
+          cd $GITHUB_WORKSPACE
+          git clone https://github.com/Kernel-SU/AnyKernel3.git ak3
+          cd ak3
+          cp $GITHUB_WORKSPACE/android/kernel/out/arch/arm64/boot/Image .
+          sed -i 's/device.name1=.*/device.name1=socrates/' anykernel.sh
+          sed -i 's/device.name2=.*/device.name2=socrates_in/' anykernel.sh
+          zip -r9 $GITHUB_WORKSPACE/output_images/LineageOS-24.0-socrates-SolutionB-kABI-Docker.zip * -x .git .github README.md
 
       - name: Package Official AOSP Boot Image with AVB Footer
         run: |
