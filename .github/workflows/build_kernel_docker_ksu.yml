@@ -25,9 +25,9 @@ jobs:
       - name: Maximize Build Space
         uses: easimon/maximize-build-space@master
         with:
-          root-reserve-mb: 8192
+          root-reserve-mb: 25600
           temp-reserve-mb: 4096
-          swap-size-mb: 10240
+          swap-size-mb: 16384
           remove-dotnet: 'true'
           remove-android: 'true'
           remove-haskell: 'true'
@@ -98,7 +98,7 @@ jobs:
           test -d drivers/kernelsu || (echo "KernelSU directory missing!" && exit 1)
           grep -q "CONFIG_KSU" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
 
-      - name: Configure Kernel (100% kABI-Safe Baseline + KSU-Next + Permissive CFI + ThinLTO)
+      - name: Configure Kernel (Track A: 100% Stock Full LTO & CFI Baseline + KSU-Next)
         run: |
           cd $GITHUB_WORKSPACE/android/kernel
           mkdir -p out
@@ -106,19 +106,16 @@ jobs:
           # 1. Copy 100% verified stock config extracted from running phone
           cp $GITHUB_WORKSPACE/socrates_stock_defconfig out/.config
           
-          # 2. Inject KernelSU, Permissive CFI, and ThinLTO (Strict kABI Preservation)
+          # 2. Inject KernelSU-Next (Maintain 100% Official Full LTO & strict CFI for DLKM module CRC compatibility)
           scripts/config --file out/.config \
-            -e CONFIG_KSU \
-            -e CONFIG_CFI_PERMISSIVE \
-            -d CONFIG_LTO_CLANG_FULL \
-            -e CONFIG_LTO_CLANG_THIN
+            -e CONFIG_KSU
           
           export PATH=$GITHUB_WORKSPACE/toolchain/clang-host/clang-r596125/bin:$PATH
           MAKE_ARGS="O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-"
           make $MAKE_ARGS olddefconfig
           
           # Validate critical configuration lines
-          grep -E "(CONFIG_KSU|CONFIG_CFI_PERMISSIVE|CONFIG_STACKPROTECTOR_PER_TASK|CONFIG_LTO_CLANG_THIN)=y" out/.config
+          grep -E "(CONFIG_KSU|CONFIG_LTO_CLANG_FULL|CONFIG_CFI_CLANG)=y" out/.config
 
       - name: Compile Kernel Image & Modules
         run: |
