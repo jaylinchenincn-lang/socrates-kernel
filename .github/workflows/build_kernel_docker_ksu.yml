@@ -98,7 +98,7 @@ jobs:
           test -d drivers/kernelsu || (echo "KernelSU directory missing!" && exit 1)
           grep -q "CONFIG_KSU" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
 
-      - name: "Configure Kernel (Track A - Official Full LTO Baseline + KSU-Next)"
+      - name: "Configure Kernel (Track A - ThinLTO Baseline + BTF + KSU-Next)"
         run: |
           cd $GITHUB_WORKSPACE/android/kernel
           mkdir -p out
@@ -106,12 +106,12 @@ jobs:
           # 1. Copy 100% verified stock config extracted from running phone
           cp $GITHUB_WORKSPACE/socrates_stock_defconfig out/.config
           
-          # 2. Inject KernelSU-Next & Permissive CFI, keeping 100% official Full LTO (Preserve DLKM module CRCs)
+          # 2. Inject KernelSU-Next, ThinLTO (Memory safe), BTF Trio & Fixed LOCALVERSION
           scripts/config --file out/.config \
             -e CONFIG_KSU \
             -e CONFIG_CFI_PERMISSIVE \
-            -e CONFIG_LTO_CLANG_FULL \
-            -d CONFIG_LTO_CLANG_THIN \
+            -d CONFIG_LTO_CLANG_FULL \
+            -e CONFIG_LTO_CLANG_THIN \
             -e CONFIG_DEBUG_INFO_BTF \
             -e CONFIG_DEBUG_INFO_BTF_MODULES \
             -e CONFIG_MODULE_ALLOW_BTF_MISMATCH \
@@ -123,7 +123,7 @@ jobs:
           make $MAKE_ARGS olddefconfig
           
           # Validate critical configuration lines
-          grep -E "(CONFIG_KSU|CONFIG_LTO_CLANG_FULL|CONFIG_DEBUG_INFO_BTF)=y" out/.config
+          grep -E "(CONFIG_KSU|CONFIG_LTO_CLANG_THIN|CONFIG_DEBUG_INFO_BTF)=y" out/.config
 
       - name: Compile Kernel Image & Modules
         run: |
@@ -137,27 +137,12 @@ jobs:
           cd $GITHUB_WORKSPACE/android/kernel
           MAKE_ARGS="O=out ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu-"
           
-          # 1. 免疫 GitHub Runner 进程，防止 OOM 与心跳饥饿
-          for pid in $(pgrep -f "Runner"); do
-            echo -1000 | sudo tee /proc/$pid/oom_score_adj || true
-            sudo renice -n -20 -p $pid || true
-          done
-
-          # 2. 优化系统虚拟内存页面置换策略
-          sudo sysctl vm.swappiness=10
-          sudo sysctl vm.vfs_cache_pressure=50
-
-          echo "Memory and swap status:"
+          echo "Memory status before build:"
           free -h
           
-          # 3. Phase 1: 多核并发编译各子系统 built-in 对象与 modules（生成所有 .bc/.o，耗时 ~15min，内存 <4GB）
-          echo "Starting Phase 1: Parallel compilation of built-in objects and modules..."
-          make $MAKE_ARGS -j$(nproc) arch/arm64/ kernel/ mm/ fs/ ipc/ security/ crypto/ block/ drivers/ sound/ net/ lib/ modules
-          free -h
-          
-          # 4. Phase 2: 单线程链接 vmlinux 与生成 Image（注入 --lto-O1 降负，内存稳定在 12~14GB，绝不超量）
-          echo "Starting Phase 2: Controlled single-thread link of Image..."
-          make $MAKE_ARGS -j1 KBUILD_LDFLAGS="-Wl,--lto-O1 -Wl,--threads=1 -Wl,-plugin-opt=jobs=1" Image
+          # ThinLTO 极速并行编译 (<4GB RSS, ~12-15min)
+          echo "Starting multi-core ThinLTO compilation of Image & modules..."
+          make $MAKE_ARGS -j$(nproc) Image modules
           free -h
           
           test -f out/arch/arm64/boot/Image || (echo "Kernel Image build failed!" && exit 1)
@@ -169,8 +154,41 @@ jobs:
           export KERNEL_SRC=$GITHUB_WORKSPACE/android/kernel/out
           
           cd $GITHUB_WORKSPACE/android/modules
-          echo "Building out-of-tree vendor modules against new kernel headers..."
-          make -j$(nproc) ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- KERNEL_SRC=$KERNEL_SRC OUT_DIR=$GITHUB_WORKSPACE/android/modules/out modules || true
+          echo "Building out-of-tree vendor modules against synchronized kernel headers..."
+          
+          MODULES_LIST="qcom/opensource/mmrm-driver \
+            qcom/opensource/mm-drivers/hw_fence \
+            qcom/opensource/mm-drivers/msm_ext_display \
+            qcom/opensource/mm-drivers/sync_fence \
+            qcom/opensource/audio-kernel \
+            qcom/opensource/camera-kernel \
+            qcom/opensource/dataipa/drivers/platform/msm \
+            qcom/opensource/datarmnet/core \
+            qcom/opensource/datarmnet-ext/aps \
+            qcom/opensource/datarmnet-ext/offload \
+            qcom/opensource/datarmnet-ext/shs \
+            qcom/opensource/datarmnet-ext/perf \
+            qcom/opensource/datarmnet-ext/perf_tether \
+            qcom/opensource/datarmnet-ext/sch \
+            qcom/opensource/datarmnet-ext/wlan \
+            qcom/opensource/securemsm-kernel \
+            qcom/opensource/display-drivers/msm \
+            qcom/opensource/eva-kernel \
+            qcom/opensource/video-driver \
+            qcom/opensource/graphics-kernel \
+            qcom/opensource/wlan/platform \
+            qcom/opensource/wlan/qcacld-3.0/.kiwi_v2 \
+            qcom/opensource/bt-kernel \
+            nxp/opensource/driver"
+            
+          mkdir -p $GITHUB_WORKSPACE/android/modules/out
+          for mod in $MODULES_LIST; do
+            if [ -d "$mod" ]; then
+              echo ">>> Compiling module $mod..."
+              make -C $KERNEL_SRC M=$GITHUB_WORKSPACE/android/modules/$mod ARCH=arm64 CC=clang LLVM=1 LLVM_IAS=1 CLANG_TRIPLE=aarch64-linux-gnu- CROSS_COMPILE=aarch64-linux-gnu- modules || true
+              find $GITHUB_WORKSPACE/android/modules/$mod -name "*.ko" -exec cp {} $GITHUB_WORKSPACE/android/modules/out/ \; || true
+            fi
+          done
 
       - name: Package AnyKernel3 Flashable Zip
         run: |
@@ -183,9 +201,17 @@ jobs:
           sed -i 's/device.name2=.*/device.name2=socrates_in/g' anykernel.sh
           sed -i 's/block=\/dev\/block\/bootdevice\/by-name\/boot;/block=auto;/g' anykernel.sh
           sed -i 's/is_slot_device=0;/is_slot_device=auto;/g' anykernel.sh
+          sed -i 's/do.modules=0;/do.modules=1;/g' anykernel.sh
           
           # Copy compiled kernel Image
           cp $GITHUB_WORKSPACE/android/kernel/out/arch/arm64/boot/Image .
+          
+          # Copy synchronized vendor modules into AnyKernel3
+          mkdir -p modules/vendor_dlkm
+          if [ -d "$GITHUB_WORKSPACE/android/modules/out" ]; then
+            find $GITHUB_WORKSPACE/android/modules/out -name "*.ko" -exec cp {} modules/vendor_dlkm/ \; || true
+          fi
+          find $GITHUB_WORKSPACE/android/kernel/out -name "*.ko" -exec cp {} modules/vendor_dlkm/ \; || true
           
           # Create zip
           zip -r9 $GITHUB_WORKSPACE/LineageOS-24.0-socrates-KernelSU-Docker.zip * -x .git README.md *placeholder
