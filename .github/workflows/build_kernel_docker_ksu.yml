@@ -107,31 +107,11 @@ jobs:
           sed -i 's/printf "%s" "+"/# printf "%s" "+"/g' scripts/setlocalversion
           sed -i 's/res="${res}+"/res="${res}"/g' scripts/setlocalversion
           
-          # 2. Apply Python CRC bypass patch to kernel/module.c for Qualcomm vendor modules
-          python3 -c "
-          import re
-          path = 'kernel/module.c'
-          with open(path, 'r') as f:
-              content = f.read()
-          pattern = r'(pr_warn\(\"%s: disagrees about version of symbol %s\\n\",\s*info->name,\s*symname\);\s*)return 0;'
-          replacement = r'\1/* Bypassed for Qualcomm GKI module compatibility */\n\t\treturn 1;'
-          new_content, count = re.subn(pattern, replacement, content)
-          if count > 0:
-              with open(path, 'w') as f:
-                  f.write(new_content)
-              print(f'SUCCESS: Applied CRC bypass patch ({count} location updated).')
-          else:
-              pattern_fallback = r'(disagrees about version of symbol[^\n]+\n[^\n]+;\n\s+)return 0;'
-              new_content, count = re.subn(pattern_fallback, r'\1return 1;', content)
-              with open(path, 'w') as f:
-                  f.write(new_content)
-              print(f'SUCCESS: Applied CRC fallback bypass ({count} location updated).')
-          "
-          
-          # 3. Copy 100% verified stock config extracted from running phone
+          # 2. Copy 100% verified stock config extracted from running phone
           cp $GITHUB_WORKSPACE/socrates_stock_defconfig out/.config
           
-          # 4. Inject KernelSU-Next, ThinLTO (Memory safe), BTF Trio, Permissive CFI, Strip Sig Protect & Fix LOCALVERSION
+          # 3. Inject KernelSU-Next, ThinLTO (Memory safe), BTF Trio, Permissive CFI & Fix LOCALVERSION
+          # Strictly preserve Qualcomm OEM security configs (CONFIG_MODULE_SIG_PROTECT=y) to satisfy QSEE/TrustZone
           scripts/config --file out/.config \
             -e CONFIG_KSU \
             -e CONFIG_CFI_PERMISSIVE \
@@ -140,9 +120,6 @@ jobs:
             -e CONFIG_DEBUG_INFO_BTF \
             -e CONFIG_DEBUG_INFO_BTF_MODULES \
             -e CONFIG_MODULE_ALLOW_BTF_MISMATCH \
-            -d CONFIG_MODULE_SIG_PROTECT \
-            -d CONFIG_MODULE_SIG_FORCE \
-            -d CONFIG_MODULE_SIG_ALL \
             --set-str CONFIG_LOCALVERSION "-g27eb14b66c42" \
             -d CONFIG_LOCALVERSION_AUTO
           
@@ -156,7 +133,7 @@ jobs:
           make $MAKE_ARGS olddefconfig
           
           # Validate critical configuration lines
-          grep -E "(CONFIG_KSU|CONFIG_LTO_CLANG_THIN|CONFIG_DEBUG_INFO_BTF|CONFIG_CFI_PERMISSIVE)=y" out/.config
+          grep -E "(CONFIG_KSU|CONFIG_LTO_CLANG_THIN|CONFIG_DEBUG_INFO_BTF|CONFIG_CFI_PERMISSIVE|CONFIG_MODULE_SIG_PROTECT)=y" out/.config
 
       - name: Compile Kernel Image & Modules
         run: |
